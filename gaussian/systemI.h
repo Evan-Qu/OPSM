@@ -1,283 +1,43 @@
-#include <fstream>
-#include <iostream>
-#include <thread>
-#include <chrono>
-#include <string.h>
-#include <atomic>
+16 20
+16 16 16 16 0 4 8 12 0 12 4 8 0 8 12 4 
+16 16 16 16 5 1 13 9 13 1 9 5 9 1 5 13 
+16 16 16 16 10 14 2 6 6 10 2 14 14 6 2 10 
+16 16 16 16 15 11 7 3 11 7 15 3 7 15 11 3 
+0 5 10 15 17 17 17 17 0 10 15 5 0 15 5 10 
+4 1 14 11 17 17 17 17 11 1 4 14 14 1 11 4 
+8 13 2 7 17 17 17 17 13 7 2 8 7 8 2 13 
+12 9 6 3 17 17 17 17 6 12 9 3 9 6 12 3 
+0 13 6 11 0 11 13 6 18 18 18 18 0 6 11 13 
+12 1 10 7 10 1 7 12 18 18 18 18 7 1 12 10 
+4 9 2 15 15 4 2 9 18 18 18 18 9 15 2 4 
+8 5 14 3 5 14 8 3 18 18 18 18 14 8 5 3 
+0 9 14 7 0 14 7 9 0 7 9 14 19 19 19 19 
+8 1 6 15 15 1 8 6 6 1 15 8 19 19 19 19 
+12 5 2 11 5 11 2 12 11 12 2 5 19 19 19 19 
+4 13 10 3 10 4 13 3 13 10 4 3 19 19 19 19 
 
-#ifdef _WIN32
-#include <windows.h>  
-#include <psapi.h>  
-//#include <tlhelp32.h>
-#include <direct.h>
-#include <process.h>
-#else
-#include <sys/stat.h>
-#include <sys/sysinfo.h>
-#include <sys/time.h>
-#include <unistd.h>
-#endif
+21 21
+16 16 16 16 0 4 8 12 0 12 4 8 0 8 12 4 0 4 8 12 16 
+16 16 16 16 5 1 13 9 13 1 9 5 9 1 5 13 1 5 9 13 16 
+16 16 16 16 10 14 2 6 6 10 2 14 14 6 2 10 2 6 10 14 16 
+16 16 16 16 15 11 7 3 11 7 15 3 7 15 11 3 3 7 11 15 16 
+0 5 10 15 17 17 17 17 0 10 15 5 0 15 5 10 0 5 10 15 17 
+4 1 14 11 17 17 17 17 11 1 4 14 14 1 11 4 1 4 11 14 17 
+8 13 2 7 17 17 17 17 13 7 2 8 7 8 2 13 2 7 8 13 17 
+12 9 6 3 17 17 17 17 6 12 9 3 9 6 12 3 3 6 9 12 17 
+0 13 6 11 0 11 13 6 18 18 18 18 0 6 11 13 0 6 11 13 18 
+12 1 10 7 10 1 7 12 18 18 18 18 7 1 12 10 1 7 10 12 18 
+4 9 2 15 15 4 2 9 18 18 18 18 9 15 2 4 2 4 9 15 18 
+8 5 14 3 5 14 8 3 18 18 18 18 14 8 5 3 3 5 8 14 18 
+0 9 14 7 0 14 7 9 0 7 9 14 19 19 19 19 0 7 9 14 19 
+8 1 6 15 15 1 8 6 6 1 15 8 19 19 19 19 1 6 8 15 19 
+12 5 2 11 5 11 2 12 11 12 2 5 19 19 19 19 2 5 11 12 19 
+4 13 10 3 10 4 13 3 13 10 4 3 19 19 19 19 3 4 10 13 19 
+0 1 2 3 0 1 2 3 0 1 2 3 0 1 2 3 20 20 20 20 20 
+4 5 6 7 5 4 7 6 6 7 4 5 7 6 5 4 20 20 20 20 20 
+8 9 10 11 10 11 8 9 11 10 9 8 9 8 11 10 20 20 20 20 20 
+12 13 14 15 15 14 13 12 13 12 15 14 14 15 12 13 20 20 20 20 20 
+16 16 16 16 17 17 17 17 18 18 18 18 19 19 19 19 20 20 20 20 20 
 
-std::atomic<bool> global_end_label(true);
-
-// get current process pid
-inline int GetCurrentPid()
-{
-	return getpid();
-}
-
-// get specific process cpu occupation ratio by pid
-#ifdef _WIN32
-// 
-static uint64_t convert_time_format(const FILETIME* ftime)
-{
-	LARGE_INTEGER li;
-
-	li.LowPart = ftime->dwLowDateTime;
-	li.HighPart = ftime->dwHighDateTime;
-	return li.QuadPart;
-}
-#else
-// FIXME: can also get cpu and mem status from popen cmd
-// the info line num in /proc/{pid}/status file
-#define VMRSS_LINE 22
-#define PROCESS_ITEM 14
-
-static const char* get_items(const char* buffer, unsigned int item)
-{
-	// read from buffer by offset
-	const char* p = buffer;
-
-	int len = strlen(buffer);
-	int count = 0;
-
-	for (int i = 0; i < len; i++)
-	{
-		if (' ' == *p)
-		{
-			count++;
-			if (count == item - 1)
-			{
-				p++;
-				break;
-			}
-		}
-		p++;
-	}
-
-	return p;
-}
-
-static inline unsigned long get_cpu_total_occupy()
-{
-	// get total cpu use time
-
-	// different mode cpu occupy time
-	unsigned long user_time;
-	unsigned long nice_time;
-	unsigned long system_time;
-	unsigned long idle_time;
-
-	FILE* fd;
-	char buff[1024] = { 0 };
-
-	fd = fopen("/proc/stat", "r");
-	if (nullptr == fd)
-		return 0;
-
-	fgets(buff, sizeof(buff), fd);
-	char name[64] = { 0 };
-	sscanf(buff, "%s %ld %ld %ld %ld", name, &user_time, &nice_time, &system_time, &idle_time);
-	fclose(fd);
-
-	return (user_time + nice_time + system_time + idle_time);
-}
-
-static inline unsigned long get_cpu_proc_occupy(int pid)
-{
-	// get specific pid cpu use time
-	unsigned int tmp_pid;
-	unsigned long utime;  // user time
-	unsigned long stime;  // kernel time
-	unsigned long cutime; // all user time
-	unsigned long cstime; // all dead time
-
-	char file_name[64] = { 0 };
-	FILE* fd;
-	char line_buff[1024] = { 0 };
-	sprintf(file_name, "/proc/%d/stat", pid);
-
-	fd = fopen(file_name, "r");
-	if (nullptr == fd)
-		return 0;
-
-	fgets(line_buff, sizeof(line_buff), fd);
-
-	sscanf(line_buff, "%u", &tmp_pid);
-	const char* q = get_items(line_buff, PROCESS_ITEM);
-	sscanf(q, "%ld %ld %ld %ld", &utime, &stime, &cutime, &cstime);
-	fclose(fd);
-
-	return (utime + stime + cutime + cstime);
-}
-#endif
-
-inline float GetCpuUsageRatio(int pid)
-{
-#ifdef _WIN32
-	static int64_t last_time = 0;
-	static int64_t last_system_time = 0;
-
-	FILETIME now;
-	FILETIME creation_time;
-	FILETIME exit_time;
-	FILETIME kernel_time;
-	FILETIME user_time;
-	int64_t system_time;
-	int64_t time;
-	int64_t system_time_delta;
-	int64_t time_delta;
-
-	// get cpu num
-	SYSTEM_INFO info;
-	GetSystemInfo(&info);
-	int cpu_num = info.dwNumberOfProcessors;
-
-	float cpu_ratio = 0.0;
-
-	// get process hanlde by pid
-	HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-	// use GetCurrentProcess() can get current process and no need to close handle
-
-	// get now time
-	GetSystemTimeAsFileTime(&now);
-
-	if (!GetProcessTimes(process, &creation_time, &exit_time, &kernel_time, &user_time))
-	{
-		// We don't assert here because in some cases (such as in the Task Manager)  
-		// we may call this function on a process that has just exited but we have  
-		// not yet received the notification.  
-		printf("GetCpuUsageRatio GetProcessTimes failed\n");
-		return 0.0;
-	}
-
-	// should handle the multiple cpu num
-	system_time = (convert_time_format(&kernel_time) + convert_time_format(&user_time)) / cpu_num;
-	time = convert_time_format(&now);
-
-	if ((last_system_time == 0) || (last_time == 0))
-	{
-		// First call, just set the last values.  
-		last_system_time = system_time;
-		last_time = time;
-		return 0.0;
-	}
-
-	system_time_delta = system_time - last_system_time;
-	time_delta = time - last_time;
-
-	CloseHandle(process);
-
-	if (time_delta == 0)
-	{
-		printf("GetCpuUsageRatio time_delta is 0, error\n");
-		return 0.0;
-	}
-
-	// We add time_delta / 2 so the result is rounded.  
-	cpu_ratio = (int)((system_time_delta * 100 + time_delta / 2) / time_delta); // the % unit
-	last_system_time = system_time;
-	last_time = time;
-
-	cpu_ratio /= 100.0; // convert to float number
-
-	return cpu_ratio;
-#else
-	unsigned long totalcputime1, totalcputime2;
-	unsigned long procputime1, procputime2;
-
-	totalcputime1 = get_cpu_total_occupy();
-	procputime1 = get_cpu_proc_occupy(pid);
-
-	// FIXME: the 200ms is a magic number, works well
-	usleep(200000); // sleep 200ms to fetch two time point cpu usage snapshots sample for later calculation
-
-	totalcputime2 = get_cpu_total_occupy();
-	procputime2 = get_cpu_proc_occupy(pid);
-
-	float pcpu = 0.0;
-	if (0 != totalcputime2 - totalcputime1)
-		pcpu = (procputime2 - procputime1) / float(totalcputime2 - totalcputime1); // float number
-
-	int cpu_num = get_nprocs();
-	pcpu *= cpu_num; // should multiply cpu num in multiple cpu machine
-
-	return pcpu;
-#endif
-}
-
-// get specific process physical memeory occupation size by pid (MB)
-inline float GetMemoryUsage(int pid)
-{
-#ifdef _WIN32
-	uint64_t mem = 0, vmem = 0;
-	PROCESS_MEMORY_COUNTERS pmc;
-
-	// get process hanlde by pid
-	HANDLE process = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-	if (GetProcessMemoryInfo(process, &pmc, sizeof(pmc)))
-	{
-		mem = pmc.WorkingSetSize;
-		vmem = pmc.PagefileUsage;
-	}
-	CloseHandle(process);
-
-	// use GetCurrentProcess() can get current process and no need to close handle
-
-	// convert mem from B to MB
-	return mem / 1024.0 / 1024.0;
-
-#else
-	char file_name[64] = { 0 };
-	FILE* fd;
-	char line_buff[512] = { 0 };
-	sprintf(file_name, "/proc/%d/status", pid);
-
-	fd = fopen(file_name, "r");
-	if (nullptr == fd)
-		return 0;
-
-	char name[64];
-	int vmrss = 0;
-	for (int i = 0; i < VMRSS_LINE - 1; i++)
-		fgets(line_buff, sizeof(line_buff), fd);
-
-	fgets(line_buff, sizeof(line_buff), fd);
-	sscanf(line_buff, "%s %d", name, &vmrss);
-	fclose(fd);
-
-	// cnvert VmRSS from KB to MB
-	return vmrss / 1024.0;
-#endif
-}
-
-int info(int current_pid, std::ofstream& foutPeakMem)
-{
-	//int current_pid = GetCurrentPid(); // or you can set a outside program pid
-
-	float max_cpu_ration = 0;
-	float max_memory_usage = 0;
-
-	while (global_end_label)
-	{
-		//std::cout << "current pid: " << current_pid << std::endl;
-		float cpu_usage_ratio = GetCpuUsageRatio(current_pid);
-		float memory_usage = GetMemoryUsage(current_pid);
-		max_cpu_ration = max_cpu_ration > cpu_usage_ratio ? max_cpu_ration : cpu_usage_ratio;
-		max_memory_usage = max_memory_usage > memory_usage ? max_memory_usage : memory_usage;
-
-	}
-	foutPeakMem << "cpu usage ratio: " << max_cpu_ration * 100 << "%" << std::endl;
-	foutPeakMem << "memory usage: " << max_memory_usage << "MB" << std::endl;
-	return 0;
-}
+	
+	
